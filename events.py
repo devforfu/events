@@ -1,4 +1,3 @@
-import re
 import argparse
 from datetime import datetime, timedelta
 from operator import methodcaller
@@ -34,6 +33,8 @@ def process_events(events, data, limit=None, timezone=None):
     timed_events, several_days_events = df_events[indexer], df_events[~indexer]
 
     linked_with_data = link_data_and_events(timed_events, df_data, limit, timezone)
+    # several_days_events["DateUTC"] = several_days_events["Date"]
+    # several_days_events["TimeUTC"] = several_days_events["Time"]
 
     return linked_with_data, several_days_events
 
@@ -53,21 +54,26 @@ def link_data_and_events(ev, data, limit=None, timezone=None):
     if limit is not None:
         data = data.head(limit)
 
+    fmt = [("%Y.%m.%d %H:%M", "%Y%m%d %H:%M:%S:%f"),
+           ("%d.%m.%Y %H:%M", "%Y%m%d %H:%M:%S:%f"),
+           ("%Y.%m.%d %H:%M", "%d%m%Y %H:%M:%S:%f"),
+           ("%d.%m.%Y %H:%M", "%d%m%Y %H:%M:%S:%f")]
+
     date, time = ev["Date"], ev["Time"]
-    date_time_format = "%Y.%m.%d %H:%M"
-    timestamp_format = "%Y%m%d %H:%M:%S:%f"
 
-    ev["DateAndTime"] = [pd.to_datetime(d + " " + t, format=date_time_format)
-                         for d, t in zip(date, time)]
-
-    data["DateAndTime"] = [pd.to_datetime(ts, format=timestamp_format)
-                           for ts in data["Timestamp"]]
+    for dfmt, tfmt in fmt:
+        try:
+            ev["DateAndTime"] = [pd.to_datetime(d + " " + t, format=dfmt) for d, t in zip(date, time)]
+            data["DateAndTime"] = [pd.to_datetime(ts, format=tfmt) for ts in data["Timestamp"]]
+        except ValueError:
+            continue
+        date_time_format = dfmt
+        break
 
     if timezone is not None:
         ev.DateAndTime += timedelta(hours=timezone)
 
     output = list()
-
     # group events with proper data
     for event in ev.values:
         ts = event[-1]

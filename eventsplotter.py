@@ -11,8 +11,19 @@ import matplotlib
 from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 import matplotlib.pyplot as plt
-
+import numpy as np
 import pandas as pd
+
+
+def stable_unique(items):
+    last = items[0]
+    uniq = [last]
+    for item in items[1:]:
+        if item == last:
+            continue
+        uniq.append(item)
+        last = item
+    return uniq
 
 
 class EventsPlotter(QMainWindow):
@@ -27,6 +38,7 @@ class EventsPlotter(QMainWindow):
         self.specialEventsData = None
         self.plottedEvent = None
         self.eventCommentaries = defaultdict(lambda: "")
+        self.sameTimeEvents = None
 
         # GUI initialization
         self.createLayout()
@@ -64,15 +76,15 @@ class EventsPlotter(QMainWindow):
 
     def createMenuBar(self):
         """ Adds menu bar to main window """
-        actionSelectEventsFile = QAction("&Select CSV-file...", self)
-        # actionSelectSpecialEventsFile = QAction("&Select all day events...", self)
+        actionSelectEventsFile = QAction("Select &timed events...", self)
+        actionSelectSpecialEventsFile = QAction("Select &special events...", self)
 
         optionsMenu = self.menuBar().addMenu("&Options")
         optionsMenu.addAction(actionSelectEventsFile)
-        # optionsMenu.addAction(actionSelectSpecialEventsFile)
+        optionsMenu.addAction(actionSelectSpecialEventsFile)
 
         actionSelectEventsFile.triggered.connect(lambda: self.showChooseLinkedFileDialog())
-        # actionSelectSpecialEventsFile.triggered.connect(lambda: self.showChooseAllDayFileDialog())
+        actionSelectSpecialEventsFile.triggered.connect(lambda: self.showChooseAllDayFileDialog())
 
     def bindEvents(self):
         self.btnPrevEvent.clicked.connect(self.plotPrevEvent)
@@ -81,23 +93,20 @@ class EventsPlotter(QMainWindow):
     def plotEvent(self, ahead=True):
         """ Increments or decrements current event index and plots new graph onto canvas.
         """
-        leavedEvent = self.getSameTimeEvents()
-        # step = len(leavedEvent)
-        joinedNames = self.CompoundEventSplitter.join(leavedEvent)
-
-        if ahead:
-            self.plottedEvent = min(self.plottedEvent + 1, len(self.eventNames) - 1)
-        else:
-            self.plottedEvent = max(0, self.plottedEvent - 1)
+        leavedEvents = self.sameTimeEvents[self.plottedEvent]
+        joinedNames = self.CompoundEventSplitter.join(leavedEvents)
+        self.plottedEvent = {
+            True: min(self.plottedEvent + 1, len(self.sameTimeEvents) - 1),
+            False: max(0, self.plottedEvent - 1)
+        }[ahead]
 
         comment = str(self.txtComment.text())
         if comment:
-            self.eventCommentaries[joinedNames] = comment
+            self.eventCommentaries[leavedEvents] = comment
 
-        enteredEvent = self.getSameTimeEvents()
-        enteredEvent = self.CompoundEventSplitter.join(enteredEvent)
-
+        enteredEvent = self.sameTimeEvents[self.plottedEvent]
         comment = self.eventCommentaries[enteredEvent]
+
         self.txtComment.setText(comment)
         self.plot()
         self.fillPlotInfo()
@@ -123,7 +132,8 @@ class EventsPlotter(QMainWindow):
         if dlg.exec():
             self.linkedFileName = dlg.selectedFiles()[0]
             self.eventsData = self.readCsv(self.linkedFileName, delimiter=',')
-            self.eventNames = self.eventsData.Event.unique()
+            self.eventsData = self.resolve_duplicates(self.eventsData)
+            self.sameTimeEvents = self.groupEvents()
             self.plottedEvent = 0
             self.plot()
             self.fillPlotInfo()
@@ -138,8 +148,7 @@ class EventsPlotter(QMainWindow):
         if filename is None:
             return
 
-        df = pd.read_csv(filename, delimiter=delimiter)
-        return self.resolve_duplicates(df)
+        return pd.read_csv(filename, delimiter=delimiter)
 
     def resolve_duplicates(self, df):
         """ Adds data postfixes to duplicated events names """
@@ -154,16 +163,13 @@ class EventsPlotter(QMainWindow):
                 keys.append(k)
                 groups.append(g)
 
-            # if len(keys) > 1:
             for (date, time), g in zip(keys, groups):
                 procdf = g
                 procdf["Event"] += " ({} {})".format(date, time)
                 processed.append(procdf)
 
-            # else:
-            #     processed.extend(groups)
+        newdf = pd.concat(processed).sort(['Date', 'Time'])
 
-        newdf = pd.concat(processed)
         return newdf
 
     def plot(self):
@@ -171,39 +177,61 @@ class EventsPlotter(QMainWindow):
 
             Delegates most of functionality to PlotWindow class
         """
-        if self.eventsData is None or self.eventNames is None:
+        if self.eventsData is None or self.sameTimeEvents is None:
             return
 
-        current_events = self.getSameTimeEvents()
+        currentEvents = self.sameTimeEvents[self.plottedEvent]
         self.plotWindow.clearPlot()
-        self.plotWindow.plot(self.eventsData, event_name=current_events,
+        self.plotWindow.plot(self.eventsData, event_name=currentEvents,
                              splitter=self.CompoundEventSplitter,
                              xcol="DateAndTime", ycol=["Ask price", "Bid price"])
 
-    def getSameTimeEvents(self):
-        """ Gets events that occured at same time with curretly plotted event """
-        df = self.eventsData
-        event_name = self.eventNames[self.plottedEvent]
-        current_event = df[df.Event == event_name]
-        dates, times = current_event.DateUTC.unique(), current_event.TimeUTC.unique()
-        date, time = dates[0], times[0]
+    def groupEvents(self):
+        if not isinstance(self.eventsData, pd.DataFrame):
+            raise TypeError("Cannot group events by dates")
 
-        same_time_events = df[(df.DateUTC == date) & (df.TimeUTC == time)].Event
-        return list(same_time_events.unique())
+        df = self.eventsData
+        allSameTimeEvents = list()
+
+        for eventName in stable_unique(df.Event.values):
+            currentEvent = df[df.Event == eventName]
+            dates, times = currentEvent.DateUTC.unique(), currentEvent.TimeUTC.unique()
+            date, time = dates[0], times[0]
+
+            same_time_events = df[(df.DateUTC == date) & (df.TimeUTC == time)].Event
+            uniq = tuple(same_time_events.unique())
+            if uniq not in allSameTimeEvents:
+                allSameTimeEvents.append(uniq)
+
+        return allSameTimeEvents
 
     def fillPlotInfo(self, ignore=None):
         """
         """
         if ignore is None:
-            ignore = ['Timestamp', 'DateAndTime', 'Date', 'Time', 'Event']
+            ignore = ['Timestamp', 'DateAndTime', 'Date', 'Time', 'Event',
+                      'Ask price', 'Bid price', 'Ask volume', 'Bid volume']
 
         df = self.eventsData
+        eventInfos = dict()
+        date = None
 
-        event_infos = dict()
-        for name in self.getSameTimeEvents():
+        for name in self.sameTimeEvents[self.plottedEvent]:
             current_event = df[df.Event == name]
-            date = current_event.Date.iloc[0]
-            event_infos[name] = [(k, v) for k, v in current_event.iloc[0].iteritems() if k not in ignore]
+            if date is None:
+                date = current_event.DateUTC.iloc[0]
+            eventInfos[name] = [(k, v) for k, v in current_event.iloc[0].iteritems() if k not in ignore]
+
+        # special (several days) events
+        se = self.specialEventsData
+        if isinstance(se, pd.DataFrame) and not se.empty:
+            se = se[se.Date == date.replace('-', '.')]
+            for name in se.Event:
+                current_event = se[se.Event == name]
+                name += " (" + current_event.Time.iloc[0] + ")"
+                eventInfos[name] = [(k, v) for k, v in current_event.iloc[0].iteritems() if k not in ignore]
+                eventInfos[name].append(("DateUTC", "-"))
+                eventInfos[name].append(("TimeUTC", "-"))
 
         # remove widgets with info from previous event
         while True:
@@ -217,39 +245,37 @@ class EventsPlotter(QMainWindow):
         last_row, info_length, info_labels = None, None, None
 
         # dynamically fills info layout with widgets
-        for row, name in enumerate(event_infos):
+        for row, name in enumerate(eventInfos):
             labelEventName = QLabel(name)
             labelEventName.setFont(QFont("Palatino", 10))
             self.plotInfo.addWidget(labelEventName, row + 1, 0)
-            info = event_infos[name]
+            info = eventInfos[name]
 
+            nextStyle = "QLabel {{ background-color: {}; color: black; }}"
+            nextColor = "transparent"
             for col, (label, value) in enumerate(info, 1):
                 if row == 0:
                     # first event processing so need add column headers
                     self.plotInfo.addWidget(QLabel(label + ":"), 0, col)
-                self.plotInfo.addWidget(QLabel(str(value)), row + 1, col)
+
+                fmt = nextStyle.format(nextColor)
+                widget = QLabel(str(value))
+                widget.setStyleSheet(fmt)
+
+                if label in ("ActualForecastDiff", "PreviousForecastDiff"):
+                    nextColor = {
+                        '>': '#32cd32', '=': '#ffffff', '<': '#ed4337'
+                    }[value]
+
+                else:
+                    nextColor = 'transparent'
+
+                self.plotInfo.addWidget(widget, row + 1, col)
 
             last_row = row
             info_labels = info
             info_length = len(info)
 
-        # TODO: finish with All Day events
-        # ev = self.specialEventsData
-        # if isinstance(ev, pd.DataFrame):
-        #     ev = ev[ev.Date == date]
-        #
-        #     if not ev.empty:
-        #         last_row += 1
-        #         self.plotInfo.addWidget(QLabel("Special events"), last_row, 0, info_length, 1)
-        #
-        #         labelEventName = QLabel(name)
-        #         labelEventName.setFont(QFont("Palatino", 10))
-        #         self.plotInfo.addWidget(labelEventName, last_row + 1, 0)
-        #
-        #         for col, (label, value) in enumerate(info, 1):
-        #             self.plotInfo.addWidget(QLabel(str(value)), row + 1, col)
-
-        self.plotInfo.setRowStretch(last_row + 1, 10)
         self.repaint()
 
     def closeEvent(self, *args, **kwargs):
@@ -293,7 +319,7 @@ class PlotWindow(QDialog):
     def plot(self, df, event_name, xcol, ycol, splitter=" / "):
         """ Plots graph for specified event """
         concat_names = ""
-        if isinstance(event_name, list):
+        if isinstance(event_name, (tuple, list)):
             # handle case with several events occurred in same time
             concat_names = splitter.join([name for name in event_name])
             event_name = event_name[0]
@@ -301,6 +327,9 @@ class PlotWindow(QDialog):
         ax = self.figure.add_subplot(1, 1, 1)
 
         fed = df[df.Event == event_name]
+        import math
+        ymin = math.ceil(fed[ycol].min().min() * 1000) / 1000.0 - 0.0005
+        ymax = math.ceil(fed[ycol].max().max() * 1000) / 1000.0 + 0.0005
         dates = fed.DateAndTime.values
 
         # plot graph and setup plotting surface parametes
@@ -310,6 +339,8 @@ class PlotWindow(QDialog):
         ax.tick_params(axis='y', which='major', labelsize=10)
         yformatter = matplotlib.ticker.ScalarFormatter(useOffset=False)
         ax.yaxis.set_major_formatter(yformatter)
+
+        ax.set_yticks(np.arange(ymin, ymax, 0.0005))
 
         # refresh canvas
         self.canvas.draw()
