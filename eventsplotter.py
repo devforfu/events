@@ -1,6 +1,7 @@
 import os
 import sys
 import csv
+import math
 from datetime import datetime
 from collections import defaultdict
 
@@ -327,7 +328,6 @@ class PlotWindow(QDialog):
         ax = self.figure.add_subplot(1, 1, 1)
 
         fed = df[df.Event == event_name]
-        import math
         ymin = math.ceil(fed[ycol].min().min() * 1000) / 1000.0 - 0.0005
         ymax = math.ceil(fed[ycol].max().max() * 1000) / 1000.0 + 0.0005
         dates = fed.DateAndTime.values
@@ -339,7 +339,6 @@ class PlotWindow(QDialog):
         ax.tick_params(axis='y', which='major', labelsize=10)
         yformatter = matplotlib.ticker.ScalarFormatter(useOffset=False)
         ax.yaxis.set_major_formatter(yformatter)
-
         ax.set_yticks(np.arange(ymin, ymax, 0.0005))
 
         # refresh canvas
