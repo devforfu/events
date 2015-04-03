@@ -31,6 +31,11 @@ class EventsPlotter(QMainWindow):
 
     CompoundEventSplitter = " :: "
 
+    IgnoredColumns = ('Timestamp', 'DateAndTime', 'Date', 'Time', 'Event',
+                      'Ask price', 'Bid price', 'Ask volume', 'Bid volume',
+                      'BreakoutStartDate', 'BreakoutEndDate', 'BreakoutStartPrice',
+                      'BreakoutEndPrice', 'BreakoutPriceDelta')
+
     def __init__(self, size):
         super(EventsPlotter, self).__init__()
         self.linkedFileName = None
@@ -149,7 +154,9 @@ class EventsPlotter(QMainWindow):
         if filename is None:
             return
 
-        return pd.read_csv(filename, delimiter=delimiter)
+        df = pd.read_csv(filename, delimiter=delimiter)
+        df["DateAndTime"] = pd.to_datetime(df.DateAndTime)
+        return df
 
     def resolve_duplicates(self, df):
         """ Adds data postfixes to duplicated events names """
@@ -209,19 +216,23 @@ class EventsPlotter(QMainWindow):
     def fillPlotInfo(self, ignore=None):
         """
         """
-        if ignore is None:
-            ignore = ['Timestamp', 'DateAndTime', 'Date', 'Time', 'Event',
-                      'Ask price', 'Bid price', 'Ask volume', 'Bid volume']
+        # if ignore is None:
+        #     ignore = EventsPlotter.IgnoredColumns
 
         df = self.eventsData
         eventInfos = dict()
         date = None
 
+        columns_order = ['Currency', 'Importance', 'ActualForecastDiff', 'Actual',
+                         'Forecast', 'PreviousForecastDiff', 'Previous', 'DateUTC', 'TimeUTC']
+
         for name in self.sameTimeEvents[self.plottedEvent]:
             current_event = df[df.Event == name]
+            current_event = current_event[columns_order]
             if date is None:
                 date = current_event.DateUTC.iloc[0]
-            eventInfos[name] = [(k, v) for k, v in current_event.iloc[0].iteritems() if k not in ignore]
+            # eventInfos[name] = [(k, v) for k, v in current_event.iloc[0].iteritems() if k not in ignore]
+            eventInfos[name] = [(k, v) for k, v in current_event.iloc[0].iteritems()]
 
         # special (several days) events
         se = self.specialEventsData
@@ -335,6 +346,11 @@ class PlotWindow(QDialog):
         # plot graph and setup plotting surface parametes
         ax.hold(True)
         ax = fed.plot(x=xcol, y=ycol, ax=ax, rot=20)
+        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d/%m/%Y %H:%M:%S"))
+
+        # breakouts plotting
+        self.draw_breakouts(fed, xcol, ycol, ax)
+
         ax.tick_params(axis='x', which='major', labelsize=9)
         ax.tick_params(axis='y', which='major', labelsize=10)
         yformatter = matplotlib.ticker.ScalarFormatter(useOffset=False)
@@ -344,6 +360,23 @@ class PlotWindow(QDialog):
         # refresh canvas
         self.canvas.draw()
         self.figure.tight_layout(pad=0.5)
+
+    def draw_breakouts(self, df, xcol, ycol, ax):
+        """
+        """
+        df = df.dropna()
+
+        if df.empty:
+            return
+
+        start_date = pd.to_datetime(df.BreakoutStartDate.iloc[0])
+        end_date = pd.to_datetime(df.BreakoutEndDate.iloc[0])
+        start_price = df.BreakoutStartPrice.iloc[0]
+        end_price = df.BreakoutEndPrice.iloc[0]
+        ax.annotate("Start", xy=(start_date, start_price))
+        ax.annotate("End", xy=(end_date, end_price))
+        ax.scatter(x=(start_date, end_date), y=(start_price, end_price),
+                   s=80, color=[1, 0, 0, 0.75])
 
 
 if __name__ == "__main__":

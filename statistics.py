@@ -1,20 +1,34 @@
+import os
+from operator import itemgetter
+from datetime import datetime, timedelta
+from multiprocessing import Queue, Process
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
 
 
-__all__ = ["Statistics"]
+__all__ = ["Statistics", "calculate_statistics_threaded"]
 
 
 class Statistics:
 
-    def __init__(self, filename, delimiter=',', limit=None):
-        self._filename = filename
-        df = pd.read_csv(filename, delimiter=delimiter)
+    def __init__(self, filename=None, dataframe=None, delimiter=',', limit=None):
+        if not filename and not isinstance(dataframe, pd.DataFrame):
+            raise ValueError("filename or dataframe should be defined")
+
+        if filename and isinstance(dataframe, pd.DataFrame):
+            raise ValueError("filename and dataframe cannot be defined both")
+
+        if dataframe is not None:
+            df = dataframe
+        else:
+            df = pd.read_csv(filename, delimiter=delimiter)
+
+        df["DateAndTime"] = pd.to_datetime(df.DateAndTime)
+
         if limit is not None:
             df = df.head(limit)
-        df["DateAndTime"] = pd.to_datetime(df["DateAndTime"])
         self._df = df
         self._breakouts = dict()
 
@@ -71,24 +85,72 @@ class Statistics:
         return df
 
 
-def plot_breakouts2(filename):
+def calc_thread(queue, order, df, stat_params):
+    """ Daemon thread for linked events statistics calculation """
+    stat = Statistics(dataframe=df)
+    processed = stat.breakout_calculation(**stat_params)
+    queue.put((order, processed))
+
+
+def calculate_statistics_threaded(input_file, output_file=None):
+    """ Multiprocessing events statistic calculation.
+
+        Splits initial dataframe into several almost equal subframes
+        and calculates statistics for each of them.
+    """
+    if output_file is None:
+        output_file = input_file
+
+    df = pd.read_csv(input_file)
+    df["DateAndTime"] = pd.to_datetime(df["DateAndTime"])
+
+    n = os.cpu_count()
+    queue = Queue()
+    procs = list()
+    params = dict(min_change=0.0020, max_pullback=0.0010)
+
+    event_names = [name for (_, _, name), g in df.groupby(["DateUTC", "TimeUTC", "Event"])]
+
+    for i, names_range in enumerate(np.array_split(event_names, n, axis=0)):
+        sf = pd.DataFrame()
+        for name in names_range:
+            sf = pd.concat([sf, df[df.Event == name]])
+        p = Process(target=calc_thread, args=(queue, i, sf, params))
+        p.daemon = True
+        procs.append(p)
+
+    for p in procs:
+        p.start()
+
+    processed = list()
+    while True:
+        try:
+            order, subframe = queue.get(timeout=3600)
+        except Queue.Empty:
+            break
+        processed.append((order, subframe))
+        if len(processed) == n:
+            break
+
+    sorted(processed, key=itemgetter(0))
+    merged_frame = pd.concat([frame for _, frame in processed])
+    merged_frame.to_csv(output_file, index=False)
+
+
+def plot_breakouts(filename):
     """ Helper function for testing purposes.
 
         Draws found breakouts onto event data plot.
     """
-    stat = Statistics(filename)
-    df = stat.breakout_calculation(min_change=0.00025, max_pullback=0.0010)
-
-    if not stat.breakouts:
-        print("Warning: provided dataset has no breakouts with specified parameters")
-        return
+    df = pd.read_csv(filename)
+    df["DateAndTime"] = pd.to_datetime(df.DateAndTime)
+    df = df.dropna()
 
     fig = plt.figure(figsize=(15, 8))
     ax = fig.add_subplot(1, 1, 1)
-    df = df.dropna()
 
     for k, g in df.groupby(["DateUTC", "TimeUTC", "Event"]):
-        ax = g.plot(x=["DateAndTime"], y=["Ask price"], ax=ax)
+        ax = g.plot(x="DateAndTime", y=["Ask price"], ax=ax)
         start_date, end_date = g.BreakoutStartDate.iloc[0], g.BreakoutEndDate.iloc[0]
         start_price, end_price = g.BreakoutStartPrice.iloc[0], g.BreakoutEndPrice.iloc[0]
         ax.annotate("Start", xy=(start_date, start_price))
@@ -99,8 +161,14 @@ def plot_breakouts2(filename):
         fig.savefig(" ".join(k).replace(':', '-').replace('/', '') + ".png")
         ax.clear()
 
-    df.to_csv("linked_with_breakouts.csv", index=False)
 
-                
 if __name__ == "__main__":
-    plot_breakouts2("linked_sample.csv")
+    input_file, output_file = "linked.csv", "linked_with_breakout.csv"
+
+    calculate_statistics_threaded(input_file, output_file)
+
+    # stat = Statistics(filename=input_file)
+    # df = stat.breakout_calculation(min_change=0.00025, max_pullback=0.0010)
+    # df.to_csv(output_file, index=False)
+
+    plot_breakouts(output_file)

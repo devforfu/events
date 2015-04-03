@@ -92,11 +92,11 @@ def link_data_and_events(ev, data, limit=None, timezone=None):
     dataframe = pd.DataFrame(output, columns=cols)
 
     # synchronize original Date and Time columns with DateAndTime
-    dates = pd.Series(datetime.strptime(d + " " + t, date_time_format) + timedelta(hours=timezone)
-                      for d, t in zip(dataframe.Date, dataframe.Time))
-
-    dataframe["DateUTC"] = dates.map(methodcaller('date'))
-    dataframe["TimeUTC"] = dates.map(methodcaller('time'))
+    if timezone is not None:
+        dates = pd.Series(datetime.strptime(d + " " + t, date_time_format) + timedelta(hours=timezone)
+                          for d, t in zip(dataframe.Date, dataframe.Time))
+        dataframe["DateUTC"] = dates.map(methodcaller('date'))
+        dataframe["TimeUTC"] = dates.map(methodcaller('time'))
 
     return dataframe
 
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--data", type=str, help="path to data CSV-file")
     parser.add_argument("-l", "--limit", nargs='?', type=int, default=None,
                         help="max records to be processed")
-    parser.add_argument("-t", "--timezone", nargs='?', type=int, default=7,
+    parser.add_argument("-t", "--timezone", nargs='?', type=int, default=5,
                         help="date and time shift")
     args = vars(parser.parse_args())
 
