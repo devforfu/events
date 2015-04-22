@@ -2,7 +2,7 @@ import os
 import sys
 import csv
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 import PyQt4
@@ -337,10 +337,10 @@ class PlotWindow(QDialog):
             event_name = event_name[0]
 
         ax = self.figure.add_subplot(1, 1, 1)
-
+        offset = 0.0005
         fed = df[df.Event == event_name]
-        ymin = math.ceil(fed[ycol].min().min() * 1000) / 1000.0 - 0.0005
-        ymax = math.ceil(fed[ycol].max().max() * 1000) / 1000.0 + 0.0005
+        ymin = math.ceil(fed[ycol].min().min() * 1000) / 1000.0 - offset
+        ymax = math.ceil(fed[ycol].max().max() * 1000) / 1000.0 + offset
         dates = fed.DateAndTime.values
 
         # plot graph and setup plotting surface parametes
@@ -349,7 +349,7 @@ class PlotWindow(QDialog):
         ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d/%m/%Y %H:%M:%S"))
 
         # breakouts plotting
-        self.draw_breakouts(fed, xcol, ycol, ax)
+        self.draw_breakouts(fed, xcol, ycol, ax, ymin + 2*offset, ymax - 2*offset)
 
         ax.tick_params(axis='x', which='major', labelsize=9)
         ax.tick_params(axis='y', which='major', labelsize=10)
@@ -361,22 +361,53 @@ class PlotWindow(QDialog):
         self.canvas.draw()
         self.figure.tight_layout(pad=0.5)
 
-    def draw_breakouts(self, df, xcol, ycol, ax):
-        """
+    def draw_breakouts(self, df, xcol, ycol, ax, ymin, ymax):
+        """ Draws breakout points onto event plot.
         """
         df = df.dropna()
 
         if df.empty:
             return
 
+        xmin, xmax = df[xcol].iloc[[0, -1]]
+
         start_date = pd.to_datetime(df.BreakoutStartDate.iloc[0])
         end_date = pd.to_datetime(df.BreakoutEndDate.iloc[0])
         start_price = df.BreakoutStartPrice.iloc[0]
         end_price = df.BreakoutEndPrice.iloc[0]
+        event_date = pd.to_datetime(df.DateUTC.iloc[0] + " " + df.TimeUTC.iloc[0])
+
+        # breakpoints
         ax.annotate("Start", xy=(start_date, start_price))
         ax.annotate("End", xy=(end_date, end_price))
         ax.scatter(x=(start_date, end_date), y=(start_price, end_price),
                    s=80, color=[1, 0, 0, 0.75])
+
+        # vertical lines with annotations
+        ax.plot((start_date, start_date), (ymin, start_price), 'r--')
+        if event_date > start_date:
+            diff = event_date - start_date
+        else:
+            diff = start_date - event_date
+        diff = diff.to_pytimedelta().seconds
+        ax.annotate(str(diff) + " s", xy=(start_date, ymin),
+                    horizontalalignment='center', verticalalignment='center')
+
+        ax.plot((end_date, end_date), (ymin, end_price), 'r--')
+        if event_date < end_date:
+            diff = end_date - event_date
+        else:
+            diff = event_date - end_date
+        diff = diff.to_pytimedelta().seconds
+        ax.annotate(str(diff) + " s", xy=(end_date, ymin),
+                    horizontalalignment='center', verticalalignment='center')
+
+        # horizontal lines with annotations
+        ax.plot((xmin, start_date), (start_price, start_price), 'r--')
+        ax.plot((xmin, end_date), (end_price, end_price), 'r--')
+        ax.annotate("d=" + str(round(abs(start_price - end_price), 5)),
+                    xy=(xmin + timedelta(seconds=30), (start_price + end_price)/2),
+                    horizontalalignment='right', verticalalignment='bottom')
 
 
 if __name__ == "__main__":

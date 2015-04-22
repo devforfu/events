@@ -1,0 +1,11 @@
+.*
+!.gitignore
+*.pyc
+__*__
+*.csv
+*.mp4
+*.png
+*.bat
+*.zip
+Thumbs.db
+*.log
