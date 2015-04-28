@@ -58,6 +58,10 @@ class Statistics:
     def breakout_calculation(self, attr='Ask price', min_change=0.0020,
                              max_duration=10, max_pullback=0.0010):
         """ Calculates brakeouts for linked events.
+
+            Breakout is defined by two points (start_date, start_price)
+            and (end_date, end_price), price delta and distance from
+            event. Found breakouts are stored into file with linked events.
         """
         df = self._df
         verbose = self._verbose
@@ -134,13 +138,40 @@ class Statistics:
                 logging.warning("[-] Breakout processing issue for %s event", name)
                 continue
             diff = abs(end_price - start_price)
+            event_date = pd.to_datetime(d + " " + t)
+            if event_date > start_date:
+                start_diff = event_date - start_date
+            else:
+                start_diff = start_date - event_date
+            if event_date > end_date:
+                end_diff = event_date - end_date
+            else:
+                end_diff = end_date - event_date
+
+            start_diff = start_diff.to_pytimedelta().seconds
+            end_diff = end_diff.to_pytimedelta().seconds
             df.ix[condition, "BreakoutStartDate"] = start_date
             df.ix[condition, "BreakoutEndDate"] = end_date
             df.ix[condition, "BreakoutStartPrice"] = start_price
             df.ix[condition, "BreakoutEndPrice"] = end_price
             df.ix[condition, "BreakoutPriceDelta"] = round(diff, 5)
-
+            df.ix[condition, "DistanceFromStartToEvent"] = start_diff
+            df.ix[condition, "DistanceFromEndToEvent"] = end_diff
         return df
+
+
+def collect_breakouts(df):
+    """ Extract all breakouts info from data frame """
+    index = ["Event", "DateUTC", "TimeUTC", "BreakoutStartDate",
+             "BreakoutStartPrice", "BreakoutEndDate", "BreakoutEndPrice",
+             "BreakoutPriceDelta", "DistanceFromStartToEvent",
+             "DistanceFromEndToEvent"]
+    df = df.dropna()
+    breakouts, filtered = df[index], list()
+    for key, group in breakouts.groupby(["Event", "DateUTC", "TimeUTC"]):
+        filtered.append(group.iloc[0].values)
+    filtered_dataframe = pd.DataFrame(filtered, columns=index)
+    return filtered_dataframe
 
 
 def calc_thread(queue, order, df, stat_params):
@@ -198,7 +229,7 @@ def calculate_statistics_threaded(input_file, output_file=None,
 
     sorted(processed, key=itemgetter(0))
     merged_frame = pd.concat([frame for _, frame in processed])
-    merged_frame.to_csv(output_file, index=False)
+    return merged_frame
 
 
 def plot_breakouts(filename):
@@ -237,6 +268,7 @@ def plot_breakouts(filename):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
     parser.add_argument("-i", "--input", type=str,
                         help="file with linked events name")
     parser.add_argument("-o", "--output", type=str,
@@ -247,18 +279,28 @@ if __name__ == "__main__":
                         help="minimum change to identify breakout start")
     parser.add_argument("--max-pullback", type=float, action='store', default=0.0010,
                         help="maximum pullback to identify breakout end")
+    parser.add_argument("--breakouts-only", action='store_true',
+                        help="store breakouts only (without price values data)")
     args = vars(parser.parse_args())
 
     input_file, output_file = args["input"], args["output"]
     min_change, max_pullback = args["min_change"], args["max_pullback"]
+    breakouts_only = args["breakouts_only"]
 
     if args["threaded"]:
-        calculate_statistics_threaded(input_file, output_file,
-                                      min_change, max_pullback)
+        df = calculate_statistics_threaded(
+            input_file, output_file, min_change, max_pullback)
     else:
         stat = Statistics(filename=input_file)
-        df = stat.breakout_calculation(min_change=min_change,
-                                       max_pullback=max_pullback)
-        df.to_csv(output_file, index=False)
+        df = stat.breakout_calculation(
+            min_change=min_change, max_pullback=max_pullback)
 
+    df.to_csv(output_file, index=False)
+
+    # for debug purposes only
     plot_breakouts(output_file)
+
+    if breakouts_only:
+        breakouts = collect_breakouts(df)
+        # rewrite previous file
+        breakouts.to_csv(output_file)
