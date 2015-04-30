@@ -349,7 +349,8 @@ class PlotWindow(QDialog):
         ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d/%m/%Y %H:%M:%S"))
 
         # breakouts plotting
-        self.draw_breakouts(fed, xcol, ycol, ax, ymin + 2*offset, ymax - 2*offset)
+        if 'BreakoutStartDate' in fed.columns:
+            self.draw_breakouts(fed, xcol, ycol, ax, ymin + 2*offset, ymax - 2*offset)
 
         ax.tick_params(axis='x', which='major', labelsize=9)
         ax.tick_params(axis='y', which='major', labelsize=10)

@@ -245,6 +245,8 @@ def plot_breakouts(filename):
     ax = fig.add_subplot(1, 1, 1)
     xcol, ycol = "DateAndTime", "Ask price"
 
+    image_folder = "img"
+
     for k, g in df.groupby(["DateUTC", "TimeUTC", "Event"]):
         ax = g.plot(x=xcol, y=[ycol], ax=ax)
         ymin = math.ceil(g[ycol].min().min() * 1000) / 1000.0 - 0.0005
@@ -262,7 +264,8 @@ def plot_breakouts(filename):
         ax.set_yticks(np.arange(ymin, ymax, 0.0005))
 
         fig = ax.get_figure()
-        fig.savefig(" ".join(k).replace(':', '-').replace('/', '') + ".png")
+        image_name = " ".join(k).replace(':', '-').replace('/', '') + ".png"
+        fig.savefig(os.path.join(image_folder, image_name))
         ax.clear()
 
 
