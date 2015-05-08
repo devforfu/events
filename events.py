@@ -92,16 +92,17 @@ class EventsPreprocessor:
                             help="max records to be processed")
         parser.add_argument("-t", "--timezone", nargs='?', type=int, default=5,
                             help="date and time shift")
+        parser.add_argument("-o", "--optimized", action='store_true')
         return vars(parser.parse_args())
 
-    def run(self, opt=False):
+    def run(self, events_chunk=1e2, data_chuck=10e6):
         """ Starts linkage process between events and price data
         """
         if not self.args:
-            self.parse_arguments()
+            self.args = self.parse_arguments()
 
-        if opt:
-            es, ds = int(1e2), int(10e6)
+        if self.args["optimized"]:
+            es, ds = int(events_chunk), int(data_chuck)
             self.process_events_optimised(es, ds)
         else:
             self.process_events()
@@ -280,4 +281,4 @@ class EventsPreprocessor:
 
 if __name__ == '__main__':
     ep = EventsPreprocessor()
-    ep.run(opt=True)
+    ep.run()
