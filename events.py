@@ -1,7 +1,9 @@
 """ Gets as input files with events names and ask/bid price changes and links
     them together.
 """
+import sys
 import argparse
+import logging
 from operator import methodcaller
 from datetime import datetime, timedelta
 
@@ -73,11 +75,16 @@ class EventsPreprocessor:
     EventsDelimiter = ';'
     DataDelimiter = ','
 
-    def __init__(self):
+    def __init__(self, logger=None):
         self.args = self.parse_arguments()
         self.events = self._clean_up(
             pd.read_csv(self.args["events"], delimiter=self.EventsDelimiter))
         self.data = pd.DataFrame()
+        self.logger = logger
+
+    @property
+    def verbose(self):
+        return self.args["verbose"]
 
     @staticmethod
     def parse_arguments():
@@ -92,8 +99,16 @@ class EventsPreprocessor:
                             help="max records to be processed")
         parser.add_argument("-t", "--timezone", nargs='?', type=int, default=5,
                             help="date and time shift")
-        parser.add_argument("-o", "--optimized", action='store_true')
+        parser.add_argument("-o", "--optimized", action='store_true',
+                            help="if specified, then data CSV will be processed"
+                                 " by small chunks to escape memory issues")
+        parser.add_argument("-v", "--verbose", action='store_true')
         return vars(parser.parse_args())
+
+    def log(self, fs, *args, severe=False):
+        if not severe and not self.verbose:
+            return
+        self.logger.debug(fs, *args)
 
     def run(self, events_chunk=1e2, data_chuck=10e6):
         """ Starts linkage process between events and price data
@@ -101,11 +116,22 @@ class EventsPreprocessor:
         if not self.args:
             self.args = self.parse_arguments()
 
+        if self.args["verbose"]:
+            if not self.logger:
+                raise ValueError("Logger object is not defined")
+            sh = logging.StreamHandler(stream=sys.stdout)
+            sh.setLevel(logging.DEBUG)
+            self.logger.addHandler(sh)
+
+        self.log("[.] Start linkage process...")
+
         if self.args["optimized"]:
             es, ds = int(events_chunk), int(data_chuck)
             self.process_events_optimised(es, ds)
         else:
             self.process_events()
+
+        self.log("[!] Linkage process finished")
 
     def process_events(self):
         """ Processes events and data CSV-files.
@@ -123,17 +149,25 @@ class EventsPreprocessor:
         self.data = pd.read_csv(
             self.args["data"], delimiter=self.DataDelimiter, index_col=False)
         df_events, df_data = self.events, self.data
+
+        self.log("[.] Timed and special events separation...")
+
         indexer = df_events.Time.str.contains("\d\d:\d\d", regex=True, na=False)
         timed_events = df_events[indexer]
         several_days_events = df_events[~indexer]
+
+        self.log("[.] Events and data linking...")
 
         linked_with_data = self._link_data_and_events(
             timed_events, df_data, self.args["limit"], self.args["timezone"])
 
         if linked_with_data.empty:
-            raise ValueError("Error occurred: linked dataframe is empty")
+            err = "Error occurred: linked dataframe is empty"
+            self.log(err, severe=True)
+            raise ValueError(err)
 
-        # save processed data as CSV
+        self.log("[.] Processed dataframes saving...")
+
         linked_with_data.to_csv("linked.csv", index=False)
         several_days_events.to_csv("special_events.csv", index=False)
 
@@ -142,12 +176,14 @@ class EventsPreprocessor:
             into smaller parts to solve memory issues.
         """
         ev = self.events
+        tz = self.args["timezone"]
         indexer = ev.Time.str.contains("\d\d:\d\d", regex=True, na=False)
         timed_events, several_days_events = ev[indexer], ev[~indexer]
 
         self.data = pd.read_csv(self.args["data"],
                                 iterator=True, chunksize=data_chunk_size)
-        tz = self.args["timezone"]
+
+        self.log("[.] Events and data linking...")
 
         start, end = 0, events_chuck_size
         count = 1
@@ -165,10 +201,19 @@ class EventsPreprocessor:
                 linked, rest = self._process_chuck(
                     chunk, upper_bound, events_slice, relevant_dates)
                 relevant_dates = rest
+
                 if linked is None:
                     continue
+
+                if linked.empty:
+                    err = "[!] Warning: linked dataframe is empty"
+                    self.log(err, severe=True)
+                    continue
+
+                self.log("[.] Events from {} to {} were linked. "
+                         "Dataframe size: {}", start + 1, end, )
+
                 filename = 'linked_events_{}_to_{}.csv'.format(start + 1, end)
-                # save processed chunk as CSV
                 linked.to_csv(filename, index=False)
 
             count += 1
@@ -176,9 +221,12 @@ class EventsPreprocessor:
             end += events_chuck_size
 
     def _process_chuck(self, c, upper_bound, events_slice, relevant_dates):
-        """
+        """ Helper method that links events and data for small piece
+            of large dataframe.
         """
         tz = self.args["timezone"]
+
+        self.log("[.] Next data chunk processing...")
 
         def search_cond(ts):
             """ Used in binary search to split ask/bid prices dataframe
@@ -279,6 +327,15 @@ class EventsPreprocessor:
         return dataframe
 
 
+def init_logger():
+    logger = logging.getLogger("events_log")
+    fh = logging.FileHandler("events.log", mode='a')
+    fh.setLevel(logging.DEBUG)
+    logger.addHandler(fh)
+    logger.setLevel(logging.DEBUG)
+    return logger
+
+
 if __name__ == '__main__':
-    ep = EventsPreprocessor()
+    ep = EventsPreprocessor(logger=init_logger())
     ep.run()

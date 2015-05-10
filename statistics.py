@@ -273,7 +273,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("-i", "--input", type=str,
-                        help="file with linked events name")
+                        help="file with linked events names")
     parser.add_argument("-o", "--output", type=str,
                         help="file with breakouts name")
     parser.add_argument("-t", "--threaded", action='store_true',
