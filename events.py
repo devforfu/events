@@ -4,6 +4,7 @@
 import sys
 import argparse
 import logging
+import pathlib
 from operator import methodcaller
 from datetime import datetime, timedelta
 
@@ -17,7 +18,10 @@ DATE_AND_TIME_FORMATS = [
     ("%Y.%m.%d %H:%M", "%d%m%Y %H:%M:%S:%f"),
     ("%d.%m.%Y %H:%M", "%d%m%Y %H:%M:%S:%f")
 ]
+MEMORY_LIMIT = 2.0
 
+# remove false warning
+pd.options.mode.chained_assignment = None 
 
 # TODO: merge utility methods
 def convert_date(d, tz):
@@ -111,7 +115,13 @@ class EventsPreprocessor:
         self.logger.debug(fs, *args)
 
     def run(self, events_chunk=1e2, data_chuck=10e6):
-        """ Starts linkage process between events and price data
+        """ Starts linkage process between events and price data.
+        
+            Arguments:
+                events_chunk (int): quantity of events dataframe rows
+                    processed per iteration (optimized mode only)
+                data_chunk (int): quantity of events data dataframe rows  
+                    processed per iteration (optimized mode only)
         """
         if not self.args:
             self.args = self.parse_arguments()
@@ -124,11 +134,17 @@ class EventsPreprocessor:
             self.logger.addHandler(sh)
 
         self.log("[.] Start linkage process...")
-
+        
         if self.args["optimized"]:
             es, ds = int(events_chunk), int(data_chuck)
             self.process_events_optimised(es, ds)
         else:
+            file_size = pathlib.Path(self.args["data"]).stat().st_size
+            gigabyte = 1024 ** 3
+            if file_size / gigabyte > MEMORY_LIMIT:
+                self.log("[!] Warning: specified data CSV file size "
+                        "is greater then 2 GB. Try to use -o flag "
+                        "if memory issues occur", severe=True)
             self.process_events()
 
         self.log("[!] Linkage process finished")
@@ -179,6 +195,12 @@ class EventsPreprocessor:
         tz = self.args["timezone"]
         indexer = ev.Time.str.contains("\d\d:\d\d", regex=True, na=False)
         timed_events, several_days_events = ev[indexer], ev[~indexer]
+                
+        if not several_days_events.empty:
+            several_days_events.to_csv("special_events.csv", index=False)
+            self.log("[+] Special events were saved into standalone CSV-file")
+        else:
+            self.log("[!] Special events not found")
 
         self.data = pd.read_csv(self.args["data"],
                                 iterator=True, chunksize=data_chunk_size)
@@ -186,17 +208,22 @@ class EventsPreprocessor:
         self.log("[.] Events and data linking...")
 
         start, end = 0, events_chuck_size
+        relevant_dates = pd.DataFrame()
         count = 1
         while True:
             events_slice = timed_events.iloc[start:end]
+            events_slice.to_csv('slice_{}_{}.csv'.format(start, end), index=False)
 
             if events_slice.empty:
                 break
 
-            last_date, last_time = events_slice[['Date', 'Time']].iloc[-1]
+            # first_date, first_time = events_slice[['Date', 'Time']].iloc[0]
+            # lower_bound = convert_date(first_date + " " + first_time) - timedelta(minutes=6)
+            last_date, last_time = events_slice[['Date', 'Time']].iloc[-1]          
             upper_bound = convert_date(last_date + " " + last_time, tz)
-            relevant_dates = pd.DataFrame()
-
+            
+            self.log("[.] Events slice bounded by %s is in processing...", upper_bound)
+            
             for chunk in self.data:
                 linked, rest = self._process_chuck(
                     chunk, upper_bound, events_slice, relevant_dates)
@@ -210,11 +237,12 @@ class EventsPreprocessor:
                     self.log(err, severe=True)
                     continue
 
-                self.log("[.] Events from {} to {} were linked. "
-                         "Dataframe size: {}", start + 1, end, )
+                self.log("[+] Events from %d to %d were linked. "
+                         "Dataframe size: %d", start + 1, end, linked.shape[0])
 
                 filename = 'linked_events_{}_to_{}.csv'.format(start + 1, end)
                 linked.to_csv(filename, index=False)
+                break
 
             count += 1
             start = end
@@ -225,8 +253,6 @@ class EventsPreprocessor:
             of large dataframe.
         """
         tz = self.args["timezone"]
-
-        self.log("[.] Next data chunk processing...")
 
         def search_cond(ts):
             """ Used in binary search to split ask/bid prices dataframe
@@ -338,4 +364,4 @@ def init_logger():
 
 if __name__ == '__main__':
     ep = EventsPreprocessor(logger=init_logger())
-    ep.run()
+    ep.run(events_chunk=1e2, data_chuck=1e6)
