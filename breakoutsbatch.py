@@ -13,7 +13,8 @@ logging.basicConfig(filename="statistics.log", level=logging.DEBUG)
 
 
 def generate_command(change_range, pullback_range, args):
-    """ Yields commands
+    """ Yields commands for statistics.py script with different values
+        of pullback and change parameters
     """
     template = "python statistics.py -i {input} -o {output} --min-change " \
                "{change} --max-pullback {pullback}{threaded} --breakouts-only"

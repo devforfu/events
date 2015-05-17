@@ -20,59 +20,90 @@ DATE_AND_TIME_FORMATS = [
 ]
 MEMORY_LIMIT = 2.0
 
-# remove false warning
+# get rid off false pandas warning
 pd.options.mode.chained_assignment = None 
 
 
 # TODO: merge utility methods
 def convert_date(d, tz):
+    # result = None
+    # for dfmt, _ in DATE_AND_TIME_FORMATS:
+    #     try:
+    #         result = pd.to_datetime(d, format=dfmt)
+    #         result += timedelta(hours=tz, minutes=5)
+    #     except ValueError:
+    #         continue
+    #     break
+    # if result is None:
+    #     raise ValueError("cannot parse provided date-time string")
+    # return result
+    return convert(d, mode='date')
+
+
+def convert_timestamp(ts):
+    # result = None
+    # for _, tfmt in DATE_AND_TIME_FORMATS:
+    #     try:
+    #         result = pd.to_datetime(ts, format=tfmt)
+    #     except ValueError:
+    #         continue
+    #     break
+    # if result is None:
+    #     raise ValueError("cannot parse provided timestamp string")
+    # return result
+    return convert(ts, mode='data')
+
+
+def convert(value, mode='date'):
     """ Utility function to parse date represented in one of predefined
         formats and fix time
 
         Arguments:
-            d (str): date and time as string
+            value (str): datetime or timestamp as a string
+
+        Returns:
+            (datetime): parsed data
     """
+    import operator
     result = None
-    for dfmt, _ in DATE_AND_TIME_FORMATS:
+    if mode == 'date':
+        get_item = operator.itemgetter(0)
+    elif mode == 'timestamp':
+        get_item = operator.itemgetter(1)
+    else:
+        raise ValueError('unexpected mode')
+    for template in DATE_AND_TIME_FORMATS:
         try:
-            result = pd.to_datetime(d, format=dfmt)
-            result += timedelta(hours=tz, minutes=5)
+            result = pd.to_datetime(value, format=get_item(template))
         except ValueError:
             continue
         break
     if result is None:
-        raise ValueError("cannot parse provided date-time string")
-    return result
-
-
-def convert_timestamp(ts):
-    """ Utility function to parse time
-    """
-    result = None
-    for _, tfmt in DATE_AND_TIME_FORMATS:
-        try:
-            result = pd.to_datetime(ts, format=tfmt)
-        except ValueError:
-            continue
-        break
-    if result is None:
-        raise ValueError("cannot parse provided timestamp string")
+        err = "cannot parse provided "
+        raise ValueError(err + ('date' if mode == 'date' else 'timestamp'))
     return result
 
 
 def binary_search(dataframe, attr, cond, low, high):
+    """ Generic binary search implementation.
+
+        Proceeds with search among specified dataframe attribute values
+        until condition function does not return zero value or low index
+        become greater then high.
+    """
+    val = None
     while low <= high:
         index = (low + high) // 2
         val = dataframe[attr].iloc[index]
         result = cond(val)
         if result == 0:
-            return index
+            return True, index
         elif result == -1:
             low = index + 1
         elif result == 1:
             high = index - 1
     # not found
-    return -1
+    return False, val
 
 
 class EventsPreprocessor:
@@ -216,25 +247,37 @@ class EventsPreprocessor:
         while True:
             events_slice = timed_events.iloc[start:end]
             # TODO: remove in release version
-            events_slice.to_csv('slice_{}_{}.csv'.format(start, end), index=False)
+            # events_slice.to_csv('slice_{}_{}.csv'.format(start, end),
+            #                     index=False)
 
             if events_slice.empty:
                 break
 
-            # first_date, first_time = events_slice[['Date', 'Time']].iloc[0]
-            # lower_bound = convert_date(first_date + " " + first_time) - timedelta(minutes=6)
-            last_date, last_time = events_slice[['Date', 'Time']].iloc[-1]          
-            upper_bound = convert_date(last_date + " " + last_time, tz)
+            first_date, first_time = events_slice[['Date', 'Time']].iloc[0]
+            lower_bound = convert(first_date + " " + first_time, mode='date')
+            lower_bound += timedelta(hours=tz, minutes=-1)
+
+            last_date, last_time = events_slice[['Date', 'Time']].iloc[-1]
+            upper_bound = convert(last_date + " " + last_time, mode='date')
+            upper_bound += timedelta(hours=tz, minutes=5)
             
-            self.log("[.] Events slice bounded by %s is in processing...", upper_bound)
+            self.log("[.] Events slice bounded by [%s; %s] is in processing...",
+                     lower_bound, upper_bound)
             
             for chunk in self.data:
+                bounds = (lower_bound, upper_bound)
                 linked, rest = self._process_chuck(
-                    chunk, upper_bound, events_slice, relevant_dates)
+                    chunk, bounds, events_slice, relevant_dates)
+
                 relevant_dates = rest
 
                 if linked is None:
-                    continue
+                    if relevant_dates.empty:
+                        err = "[!] Warning: events from %d to %d have no data"
+                        self.log(err, start + 1, end)
+                        break
+                    else:
+                        continue
 
                 if linked.empty:
                     err = "[!] Warning: linked dataframe is empty"
@@ -246,24 +289,35 @@ class EventsPreprocessor:
 
                 filename = 'linked_events_{}_to_{}.csv'.format(start + 1, end)
                 linked.to_csv(filename, index=False)
+                linked = pd.DataFrame()
                 break
 
             count += 1
             start = end
             end += events_chuck_size
 
-    def _process_chuck(self, c, upper_bound, events_slice, relevant_dates):
+    def _process_chuck(self, c, bounds, events_slice, relevant_dates):
         """ Helper method that links events and data for small piece
             of large dataframe.
         """
+        lower_bound, upper_bound = bounds
         tz = self.args["timezone"]
+
+        # current data chunk has no data for selected events slice
+        last_timestamp = convert(c.Timestamp.iloc[-1], mode='timestamp')
+        too_early_data = lower_bound > last_timestamp
+        first_timestamp = convert(c.Timestamp.iloc[0], mode='timestamp')
+        too_late_data = upper_bound < first_timestamp
+
+        if too_early_data or too_late_data:
+            return None, pd.DataFrame()
 
         def search_cond(ts):
             """ Used in binary search to split ask/bid prices dataframe
                 into appropriately sized chucks with accordance with
                 selected events range
             """
-            ts = convert_timestamp(ts)
+            ts = convert(ts, mode='timestamp')
             at = ["year", "month", "day", "hour", "minute"]
             if all(getattr(ts, a) == getattr(upper_bound, a) for a in at):
                 return 0
@@ -272,15 +326,13 @@ class EventsPreprocessor:
             elif ts > upper_bound:
                 return 1
 
-
-        # TODO: fix issue with lower bound (i.e. events have no data)
         low, high = 0, len(c.Timestamp) - 1
-        idx = binary_search(c, 'Timestamp', search_cond, low, high)
-        if idx == -1:
-            below, above = c, pd.DataFrame()
-        else:
-            below, above = c.iloc[:idx], c.iloc[idx:]
+        ok, idx = binary_search(c, 'Timestamp', search_cond, low, high)
 
+        if ok:
+            below, above = c.iloc[:idx], c.iloc[idx:]
+        else:
+            below, above = c, pd.DataFrame()
         relevant_dates = pd.concat([relevant_dates, below])
 
         if above.empty:
