@@ -23,6 +23,7 @@ MEMORY_LIMIT = 2.0
 # remove false warning
 pd.options.mode.chained_assignment = None 
 
+
 # TODO: merge utility methods
 def convert_date(d, tz):
     """ Utility function to parse date represented in one of predefined
@@ -81,6 +82,8 @@ class EventsPreprocessor:
 
     def __init__(self, logger=None):
         self.args = self.parse_arguments()
+        if self.args["events"] is None or self.args["data"] is None:
+            raise ValueError("events or data file is not specified")
         self.events = self._clean_up(
             pd.read_csv(self.args["events"], delimiter=self.EventsDelimiter))
         self.data = pd.DataFrame()
@@ -143,8 +146,8 @@ class EventsPreprocessor:
             gigabyte = 1024 ** 3
             if file_size / gigabyte > MEMORY_LIMIT:
                 self.log("[!] Warning: specified data CSV file size "
-                        "is greater then 2 GB. Try to use -o flag "
-                        "if memory issues occur", severe=True)
+                         "is greater then 2 GB. Try to use -o flag "
+                         "if memory issues occur", severe=True)
             self.process_events()
 
         self.log("[!] Linkage process finished")
@@ -212,6 +215,7 @@ class EventsPreprocessor:
         count = 1
         while True:
             events_slice = timed_events.iloc[start:end]
+            # TODO: remove in release version
             events_slice.to_csv('slice_{}_{}.csv'.format(start, end), index=False)
 
             if events_slice.empty:
@@ -260,7 +264,7 @@ class EventsPreprocessor:
                 selected events range
             """
             ts = convert_timestamp(ts)
-            at = ["year", "month", "day", "hour", "minute", "second"]
+            at = ["year", "month", "day", "hour", "minute"]
             if all(getattr(ts, a) == getattr(upper_bound, a) for a in at):
                 return 0
             elif ts < upper_bound:
@@ -268,9 +272,14 @@ class EventsPreprocessor:
             elif ts > upper_bound:
                 return 1
 
+
+        # TODO: fix issue with lower bound (i.e. events have no data)
         low, high = 0, len(c.Timestamp) - 1
         idx = binary_search(c, 'Timestamp', search_cond, low, high)
-        below, above = c.iloc[:idx], c.iloc[idx:]
+        if idx == -1:
+            below, above = c, pd.DataFrame()
+        else:
+            below, above = c.iloc[:idx], c.iloc[idx:]
 
         relevant_dates = pd.concat([relevant_dates, below])
 
@@ -292,8 +301,7 @@ class EventsPreprocessor:
             ev[text_column] = ev[text_column].str.strip()
         return ev
 
-    @staticmethod
-    def _link_data_and_events(ev, data, limit=None, timezone=None):
+    def _link_data_and_events(self, ev, data, limit=None, timezone=None):
         """ Creates data frame with events and data linked.
 
             Arguments:
@@ -324,6 +332,8 @@ class EventsPreprocessor:
         if timezone is not None:
             ev.DateAndTime += timedelta(hours=timezone)
 
+        self.log("[.] Data filtering...")
+
         output = list()
         # group events with proper data
         for event in ev.values:
@@ -341,6 +351,8 @@ class EventsPreprocessor:
 
         cols = list(ev.columns[:-1]) + list(data.columns)
         dataframe = pd.DataFrame(output, columns=cols)
+
+        self.log("[.] Timezones synchronization...")
 
         # synchronize original Date and Time columns with DateAndTime
         if timezone is not None:
@@ -364,4 +376,4 @@ def init_logger():
 
 if __name__ == '__main__':
     ep = EventsPreprocessor(logger=init_logger())
-    ep.run(events_chunk=1e2, data_chuck=1e6)
+    ep.run(events_chunk=50, data_chuck=1e6)
