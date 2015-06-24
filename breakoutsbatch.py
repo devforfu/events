@@ -3,6 +3,9 @@
     appropriately named files.
 """
 
+import os
+import sys
+import shutil
 import argparse
 import subprocess
 import logging
@@ -58,9 +61,23 @@ if __name__ == "__main__":
     pullback_range = list(range(min_pullback_low, min_pullback_high + 1))
     commands = generate_command(change_range, pullback_range, args)
 
+    if os.path.exists("img"):
+        logging.warning("[!] Warning: folder with images will be rewritten")
+        shutil.rmtree("img")
+
     for cmd in commands:
-        logging.debug("[.] Calculation...")
-        p = subprocess.Popen(cmd)
+        logging.debug("[.] Calculation for command: %s" % cmd)
+        try:
+            p = subprocess.Popen(cmd)
+        except WindowsError as e:
+            print("[!] Cannot launch command. Trying another interpreter...")
+            try:
+                cmd = cmd.replace("python", "python3")
+                p = subprocess.Popen(cmd)
+            except Exception as e:
+                print("[-] Unexpected error: %s" % str(e))
+                print("[-] Failed command: %s" % cmd)
+                sys.exit(1)
         p.wait(timeout=10000)
         logging.debug("[+] Successful")
 

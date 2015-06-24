@@ -1,5 +1,6 @@
 import os
 import math
+import shutil
 import logging
 import argparse
 from operator import itemgetter, ge, le
@@ -232,7 +233,7 @@ def calculate_statistics_threaded(input_file, output_file=None,
     return merged_frame
 
 
-def plot_breakouts(filename):
+def plot_breakouts(filename, args):
     """ Helper function for testing purposes.
 
         Draws found breakouts onto event data plot.
@@ -245,7 +246,10 @@ def plot_breakouts(filename):
     ax = fig.add_subplot(1, 1, 1)
     xcol, ycol = "DateAndTime", "Ask price"
 
-    image_folder = "img"
+    subfolder = "min_change_%.6f_max_pullback_%.6f" % \
+              (args["min_change"], args["max_pullback"])
+    image_folder = os.path.join("img", subfolder)
+    os.makedirs(image_folder)
 
     for k, g in df.groupby(["DateUTC", "TimeUTC", "Event"]):
         ax = g.plot(x=xcol, y=[ycol], ax=ax)
@@ -266,6 +270,8 @@ def plot_breakouts(filename):
         fig = ax.get_figure()
         image_name = " ".join(k).replace(':', '-').replace('/', '') + ".png"
         fig.savefig(os.path.join(image_folder, image_name))
+        logging.debug("[+] Image %s saved into '%s' folder" %
+                      (image_name, image_folder))
         ax.clear()
 
 
@@ -298,10 +304,13 @@ if __name__ == "__main__":
         df = stat.breakout_calculation(
             min_change=min_change, max_pullback=max_pullback)
 
+    folder = os.path.dirname(output_file)
+    if not os.path.exists(folder):
+        os.makedirs(folder)
     df.to_csv(output_file, index=False)
 
     # for debug purposes only
-    plot_breakouts(output_file)
+    plot_breakouts(output_file, args)
 
     if breakouts_only:
         breakouts = collect_breakouts(df)

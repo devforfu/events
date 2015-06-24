@@ -1,6 +1,7 @@
 """ Gets as input files with events names and ask/bid price changes and links
     them together.
 """
+import os
 import sys
 import argparse
 import logging
@@ -141,6 +142,8 @@ class EventsPreprocessor:
                             help="if specified, then data CSV will be processed"
                                  " by small chunks to escape memory issues")
         parser.add_argument("-v", "--verbose", action='store_true')
+        parser.add_argument("--output-folder", nargs='?', type=str,
+                            default="linked")
         return vars(parser.parse_args())
 
     def log(self, fs, *args, severe=False):
@@ -168,7 +171,14 @@ class EventsPreprocessor:
             self.logger.addHandler(sh)
 
         self.log("[.] Start linkage process...")
-        
+
+        output_folder = self.args["output_folder"]
+        if os.path.exists(output_folder):
+            self.log("[!] Warning: output folder already exists. ", severe=True)
+            os.rmdir(output_folder)
+
+        os.mkdir(output_folder)
+
         if self.args["optimized"]:
             es, ds = int(events_chunk), int(data_chuck)
             self.process_events_optimised(es, ds)
@@ -182,6 +192,7 @@ class EventsPreprocessor:
             self.process_events()
 
         self.log("[!] Linkage process finished")
+        self.log("[.] Output folder: %s" % output_folder)
 
     def process_events(self):
         """ Processes events and data CSV-files.
@@ -218,8 +229,12 @@ class EventsPreprocessor:
 
         self.log("[.] Processed dataframes saving...")
 
-        linked_with_data.to_csv("linked.csv", index=False)
-        several_days_events.to_csv("special_events.csv", index=False)
+        # linked_with_data.to_csv("linked.csv", index=False)
+        # several_days_events.to_csv("special_events.csv", index=False)
+        folder = self.args["output_folder"]
+        linked_with_data.to_csv(os.path.join(folder, "linked.csv"), index=False)
+        several_days_events.to_csv(
+            os.path.join(folder, "special_events.csv"), index=False)
 
     def process_events_optimised(self, events_chuck_size, data_chunk_size):
         """ Enhanced function that used to split big event's prices data file
@@ -288,6 +303,7 @@ class EventsPreprocessor:
                          "Dataframe size: %d", start + 1, end, linked.shape[0])
 
                 filename = 'linked_events_{}_to_{}.csv'.format(start + 1, end)
+                filename = os.path.join(self.args["output_folder"], filename)
                 linked.to_csv(filename, index=False)
                 linked = pd.DataFrame()
                 break
